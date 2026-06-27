@@ -11,6 +11,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build
+        run: |
+          npm ci
+          npm run build
+
       - name: Setup server (one-time)
         uses: appleboy/ssh-action@v1
         with:
@@ -26,16 +35,6 @@ jobs:
             which pm2 || npm install -g pm2
             which nginx || apt install -y nginx
 
-      - name: Deploy source code
-        uses: easingthemes/ssh-deploy@main
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_KEY }}
-          ARGS: '-avz --delete --exclude=node_modules --exclude=.git --exclude=.next'
-          SOURCE: '.'
-          REMOTE_HOST: ${{ secrets.SERVER_HOST }}
-          REMOTE_USER: root
-          TARGET: /var/www/botforge/
-
       - name: Setup nginx config
         uses: appleboy/ssh-action@v1
         with:
@@ -48,18 +47,25 @@ jobs:
             rm -f /etc/nginx/sites-enabled/default
             nginx -t && systemctl reload nginx || true
 
-      - name: Install deps, build & restart
+      - name: Deploy to server (including .next)
+        uses: easingthemes/ssh-deploy@main
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_KEY }}
+          ARGS: '-avz --delete --exclude=node_modules --exclude=.git --exclude=.next/cache'
+          SOURCE: '.'
+          REMOTE_HOST: ${{ secrets.SERVER_HOST }}
+          REMOTE_USER: root
+          TARGET: /var/www/botforge/
+
+      - name: Install deps & restart
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: root
           key: ${{ secrets.SSH_KEY }}
           script: |
-            export PATH="$PATH:/usr/bin:/usr/local/bin"
             cd /var/www/botforge
-            npm install 2>&1
-            ls node_modules/.bin/next 2>/dev/null || echo "MISSING next binary"
-            npx next build 2>&1
+            npm install --production 2>&1
             pm2 delete botforge 2>/dev/null || true
             pm2 start node_modules/.bin/next --name botforge -- start -p 3000
             pm2 save
