@@ -15,10 +15,18 @@ jobs:
         with:
           node-version: 20
 
-      - name: Build
+      - name: Build (standalone)
         run: |
           npm ci
           npm run build
+
+      - name: Prepare deploy
+        run: |
+          mkdir -p deploy
+          cp -r .next/standalone/. deploy/
+          cp -r .next/static deploy/.next/
+          cp -r public deploy/
+          cp server/nginx.conf deploy/
 
       - name: Setup server (one-time)
         uses: appleboy/ssh-action@v1
@@ -42,41 +50,29 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Rsync files
+      - name: Rsync standalone build
         run: |
-          rsync -avz --delete \
-            --exclude=node_modules \
-            --exclude=.git \
-            --exclude=.next/cache \
-            -e "ssh -i ~/.ssh/deploy_key" \
-            ./ root@${{ secrets.SERVER_HOST }}:/var/www/botforge/
+          rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key" \
+            deploy/ root@${{ secrets.SERVER_HOST }}:/var/www/botforge/
 
-      - name: Setup nginx config
+      - name: Setup nginx & restart
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: root
           key: ${{ secrets.SSH_KEY }}
           script: |
+            # nginx
             mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
-            cp /var/www/botforge/server/nginx.conf /etc/nginx/sites-available/botforge
+            cp /var/www/botforge/nginx.conf /etc/nginx/sites-available/botforge
             ln -sf /etc/nginx/sites-available/botforge /etc/nginx/sites-enabled/
             rm -f /etc/nginx/sites-enabled/default
             nginx -t && systemctl reload nginx || true
-
-      - name: Install deps & restart
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: root
-          key: ${{ secrets.SSH_KEY }}
-          script: |
+            # start app
             cd /var/www/botforge
-            npm install --production 2>&1
-            ls -la .next/ 2>&1 | head -5
             pm2 delete botforge 2>/dev/null || true
-            pm2 start node_modules/.bin/next --name botforge -- start -p 3000
+            pm2 start server.js --name botforge
             pm2 save
-            sleep 3
+            sleep 4
             pm2 status
             curl -s -o /dev/null -w "Health: %{http_code}" http://localhost:3000/ || echo "App not responding"
