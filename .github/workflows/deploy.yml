@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup server
+      - name: Setup server (one-time)
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -19,55 +19,46 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           script: |
             mkdir -p /var/www/botforge
-            npm install -g pm2 2>/dev/null || true
-            apt install -y nginx 2>/dev/null || true
+            which node || (curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt install -y nodejs)
+            which pm2 || npm install -g pm2
+            which nginx || apt install -y nginx
 
-      - name: Deploy nginx config
+      - name: Setup nginx config
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: root
           key: ${{ secrets.SSH_KEY }}
           script: |
-            cat > /etc/nginx/sites-available/botforge <<'EOF'
-            server {
-                listen 80;
-                server_name _;
-
-                location / {
-                    proxy_pass http://localhost:3000;
-                    proxy_http_version 1.1;
-                    proxy_set_header Upgrade $http_upgrade;
-                    proxy_set_header Connection 'upgrade';
-                    proxy_set_header Host \$host;
-                    proxy_cache_bypass \$http_upgrade;
-                }
-            }
-            EOF
+            cat > /etc/nginx/sites-available/botforge <<'NGINX'
+server {
+    listen 80;
+    server_name _;
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+NGINX
             ln -sf /etc/nginx/sites-available/botforge /etc/nginx/sites-enabled/
             rm -f /etc/nginx/sites-enabled/default
-            nginx -t && systemctl reload nginx
+            nginx -t && systemctl reload nginx || true
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install & Build
-        run: |
-          npm ci
-          npm run build
-
-      - name: Deploy via rsync
+      - name: Deploy source code
         uses: easingthemes/ssh-deploy@main
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_KEY }}
-          ARGS: '-avz --delete --exclude=node_modules --exclude=.git --exclude=.next/cache'
+          ARGS: '-avz --delete --exclude=node_modules --exclude=.git --exclude=.next'
           SOURCE: '.'
           REMOTE_HOST: ${{ secrets.SERVER_HOST }}
           REMOTE_USER: root
           TARGET: /var/www/botforge/
 
-      - name: Restart app
+      - name: Build & restart on server
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -75,7 +66,8 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           script: |
             cd /var/www/botforge
-            npm install --production
+            npm ci
+            npm run build
             pm2 delete botforge 2>/dev/null || true
             pm2 start npm --name botforge -- start
             pm2 save
