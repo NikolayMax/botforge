@@ -15,18 +15,10 @@ jobs:
         with:
           node-version: 20
 
-      - name: Build (standalone)
+      - name: Build static export
         run: |
           npm ci
           npm run build
-
-      - name: Prepare deploy
-        run: |
-          mkdir -p deploy
-          cp -r .next/standalone/. deploy/
-          cp -r .next/static deploy/.next/
-          cp -r public deploy/
-          cp server/nginx.conf deploy/
 
       - name: Setup server (one-time)
         uses: appleboy/ssh-action@v1
@@ -36,11 +28,6 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           script: |
             mkdir -p /var/www/botforge
-            if ! which node; then
-              curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-              apt install -y nodejs
-            fi
-            which pm2 || npm install -g pm2
             which nginx || apt install -y nginx
 
       - name: Write SSH key
@@ -50,29 +37,20 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Rsync standalone build
+      - name: Rsync static build
         run: |
           rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key" \
-            deploy/ root@${{ secrets.SERVER_HOST }}:/var/www/botforge/
+            out/ root@${{ secrets.SERVER_HOST }}:/var/www/botforge/
 
-      - name: Setup nginx & restart
+      - name: Setup nginx
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: root
           key: ${{ secrets.SSH_KEY }}
           script: |
-            # nginx
             mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
-            cp /var/www/botforge/nginx.conf /etc/nginx/sites-available/botforge
+            printf '%s\n' 'server {' '    listen 80;' '    server_name _;' '    root /var/www/botforge;' '    index index.html;' '    location / {' '        try_files $uri $uri/ /index.html;' '    }' '}' > /etc/nginx/sites-available/botforge
             ln -sf /etc/nginx/sites-available/botforge /etc/nginx/sites-enabled/
             rm -f /etc/nginx/sites-enabled/default
             nginx -t && systemctl reload nginx || true
-            # start app
-            cd /var/www/botforge
-            pm2 delete botforge 2>/dev/null || true
-            pm2 start server.js --name botforge
-            pm2 save
-            sleep 4
-            pm2 status
-            curl -s -o /dev/null -w "Health: %{http_code}" http://localhost:3000/ || echo "App not responding"
