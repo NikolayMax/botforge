@@ -19,7 +19,10 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           script: |
             mkdir -p /var/www/botforge
-            which node || (curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt install -y nodejs)
+            if ! which node; then
+              curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+              apt install -y nodejs
+            fi
             which pm2 || npm install -g pm2
             which nginx || apt install -y nginx
 
@@ -45,16 +48,18 @@ jobs:
             rm -f /etc/nginx/sites-enabled/default
             nginx -t && systemctl reload nginx || true
 
-      - name: Build & restart on server
+      - name: Install deps, build & restart
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: root
           key: ${{ secrets.SSH_KEY }}
           script: |
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
             cd /var/www/botforge
-            npm ci
-            npm run build
+            npm install 2>&1
+            npx next build 2>&1
             pm2 delete botforge 2>/dev/null || true
             pm2 start npm --name botforge -- start
             pm2 save
