@@ -27,6 +27,9 @@ export const metadata: Metadata = {
     "разработчик ботов",
     "заказать бота под ключ",
   ],
+  icons: {
+    icon: '/max-favicon.png',
+  },
   robots: {
     index: true,
     follow: true,
