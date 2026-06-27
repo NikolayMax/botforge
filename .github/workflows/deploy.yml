@@ -27,7 +27,7 @@ jobs:
           SOURCE: '.'
           REMOTE_HOST: ${{ secrets.SERVER_HOST }}
           REMOTE_USER: root
-          TARGET: /root/botforge/
+          TARGET: /var/www/botforge/
 
       - name: Restart app on server
         uses: appleboy/ssh-action@v1
@@ -36,7 +36,7 @@ jobs:
           username: root
           key: ${{ secrets.SSH_KEY }}
           script: |
-            cd /root/botforge
+            cd /var/www/botforge
             npm install --production
             pm2 delete botforge 2>/dev/null || true
             pm2 start npm --name botforge -- start
